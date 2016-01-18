@@ -1,2 +1,2 @@
 # oma-analyze
-Analyze source in archives
+Analyze sources in archives
