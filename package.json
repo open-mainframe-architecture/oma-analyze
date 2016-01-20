@@ -1,0 +1,27 @@
+{
+  "name": "oma-analyze",
+  "description": "Create analysis of sources in archives.",
+  "main": "index",
+  "version": "1.0.0",
+  "dependencies": {
+    "babel-traverse": "^6.3.26",
+    "babel-types": "^6.4.3",
+    "babylon": "^6.4.2",
+    "oma-constants": "^1.0.0",
+    "oma-util": "^1.0.0"
+  },
+  "keywords": [
+    "oma",
+    "open mainframe architecture",
+    "source analysis"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-mainframe-architecture/oma-analyze.git"
+  },
+  "author": "open.mainframe@gmail.com",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/open-mainframe-architecture/oma-analyze/issues"
+  }
+}
