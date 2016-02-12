@@ -55,7 +55,7 @@ function readClassScript(archive, entry, classes, className) {
 }
 
 function visitedClass(visitor) {
-  // module and class combination
+  // module and class name identify particular class script
   return '~' + visitor.moduleName + '/' + visitor.className;
 }
 
@@ -63,34 +63,20 @@ function scriptSides(functionParams) {
   var names = {};
   for (var i = 0; i < 2; ++i) {
     var param = functionParams[i];
-    var name = param && param.type === 'Identifier' ? param.name : '';
-    // first parameter is instance side, second is class side
-    names[name] = !i;
+    if (param && param.type === 'Identifier') {
+      // first parameter is instance side, second is class side
+      names[param.name] = i ? 'class' : 'instance';
+    }
   }
   return names;
 }
 
-function sideName(matchedKeyword) {
-  return matchedKeyword.instanceSide ? 'instance' : 'class';
+function offset(keyword, member) {
+  return { inside: keyword.literal.loc.start, from: member.loc.start, to: member.loc.end };
 }
 
-function literalOffset(matchedKeyword, node) {
-  return { outer: matchedKeyword.literal.start, start: node.start, end: node.end };
-}
-
-function classAspect(analysis, name) {
+function aspect(analysis, name) {
   return analysis[name] || (analysis[name] = { _: {} });
-}
-
-function addSimpleAnalysis(analysis, name, matchedKeyword, key, node) {
-  classAspect(analysis, name)._[key] = literalOffset(matchedKeyword, node);
-}
-
-function addFlagAnalysis(analysis, matchedKeyword, key, node, value) {
-  classAspect(analysis, 'flags')._[key] = {
-    boolean: value,
-    offset: literalOffset(matchedKeyword, node)
-  };
 }
 
 var ClassVisitor = {
@@ -103,6 +89,7 @@ var ClassVisitor = {
     if (!this.matchedScript) {
       // matched function (I, We) { }
       this.analysis.super = 'super';
+      this.analysis.from = astPath.node.loc.start;
       this.scriptArguments = scriptSides(astPath.node.params);
       this.matchedScript = true;
     }
@@ -119,6 +106,7 @@ var ClassVisitor = {
           throw new Error('Bad script: ' + visitedClass(this));
         }
         this.analysis.super = callee.object.value;
+        this.analysis.from = script.loc.start;
         this.scriptArguments = scriptSides(script.params);
         this.matchedScript = true;
       } else if (!this.matchedKeyword &&
@@ -129,7 +117,7 @@ var ClassVisitor = {
         this.matchedKeyword = {
           callSite: node,
           literal: args[0],
-          instanceSide: this.scriptArguments[callee.object.name],
+          side: this.scriptArguments[callee.object.name],
           keyword: callee.property.name
         };
       }
@@ -146,12 +134,12 @@ var ClassVisitor = {
     var matched = this.matchedKeyword, node = astPath.node;
     if (matched && matched.literal === astPath.parent && !node.computed) {
       var key = node.key.name, analysis = this.analysis, value = node.value;
-      var keyword = matched.keyword;
+      var keyword = matched.keyword, memberAnalysis = offset(matched, node);
       switch (keyword) {
         case 'nest':
           // traverse nested class with nested visitor
-          var nestedClasses = classAspect(analysis, 'nested');
-          var nestedAnalysis = nestedClasses._[key] = {};
+          var nestedClasses = aspect(analysis, 'nested');
+          var nestedAnalysis = nestedClasses._[key] = memberAnalysis;
           astPath.traverse(ClassVisitor, {
             className: this.className + '._.' + key,
             moduleName: this.moduleName,
@@ -163,34 +151,38 @@ var ClassVisitor = {
           if (!AST.isBooleanLiteral(value)) {
             throw new Error('Bad flag: ' + key + ' in ' + visitedClass(this));
           }
-          addFlagAnalysis(analysis, matched, key, node, value.value);
+          memberAnalysis.value = value.value;
+          aspect(analysis, 'flags')._[key] = memberAnalysis;
           break;
         case 'have':
           // instance/class variables
-          addSimpleAnalysis(analysis, sideName(matched) + 'Variables', matched, key, node);
+          aspect(analysis, matched.side + 'Variables')._[key] = memberAnalysis;
           break;
         case 'access':
           // instance/class accessors
-          addSimpleAnalysis(analysis, sideName(matched) + 'Accessors', matched, key, node);
+          aspect(analysis, matched.side + 'Accessors')._[key] = memberAnalysis;
           break;
         case 'know':
           if (AST.isNullLiteral(value)) {
             // instance/class constants
-            addSimpleAnalysis(analysis, sideName(matched) + 'Constants', matched, key, node);
+            aspect(analysis, matched.side + 'Constants')._[key] = memberAnalysis;
           } else {
             // instance/class methods
-            addSimpleAnalysis(analysis, sideName(matched) + 'Methods', matched, key, node);
+            aspect(analysis, matched.side + 'Methods')._[key] = memberAnalysis;
           }
+          break;
+        case 'refine':
+          // refinements of instance/class methods
+          aspect(analysis, matched.side + 'Refinements')._[key] = memberAnalysis;
           break;
         case 'setup':
         case 'share':
           // package constants and subroutines
-          addSimpleAnalysis(analysis, 'package', matched, key, node);
+          aspect(analysis, 'package')._[key] = memberAnalysis;
           break;
         default:
           // collect unknown aspect of instance or class side
-          var sideAnalysis = classAspect(analysis, sideName(matched));
-          classAspect(sideAnalysis._, keyword)._[key] = literalOffset(matched, node);
+          aspect(aspect(analysis, matched.side)._, keyword)._[key] = memberAnalysis;
       }
     }
   }
@@ -205,17 +197,96 @@ function analyzeClass(moduleName, className, scriptSource) {
   };
   var ast = babylon.parse(scriptSource);
   traverse(ast, ClassVisitor, null, state);
-  var annotations_ = {};
+  var remarks = [];
   ast.comments
     .filter(function (comment) {
+      // remark starts with at-sign, otherwise it's a regular comment
       return comment.value.length > 1 && comment.value.charAt(0) === '@';
     })
     .forEach(function (comment) {
-      annotations_[comment.start] = comment.value;
+      remarks.push({ value: comment.value, from: comment.loc.start });
     })
   ;
-  if (util.hasEnumerables(annotations_)) {
-    classAnalysis.annotations = { _: annotations_ };
+  if (remarks.length) {
+    collectRemarks(remarks, classAnalysis);
   }
   return classAnalysis;
+}
+
+function collectRemarks(remarks, classAnalysis, nested) {
+  if (!nested) {
+    var i = 0, n = remarks.length, classRemarks = [];
+    while (i < n && comparePosition(remarks[i].from, classAnalysis.from) < 0) {
+      classRemarks.push(remarks[i]);
+      ++i;
+    }
+    if (classRemarks.length) {
+      classAnalysis.remarks = classRemarks;
+    }
+  }
+  for (var aspectName in classAnalysis) {
+    switch (aspectName) {
+      case 'instance': case 'class':
+        var nestedSide = classAnalysis[aspectName]._;
+        for (var keywordName in nestedSide) {
+          placeRemarks(remarks, nestedSide[keywordName]._);
+        }
+        break;
+      case 'nested':
+        var nestedClasses = classAnalysis.nested._;
+        for (var nestedName in nestedClasses) {
+          collectRemarks(remarks, nestedClasses[nestedName], true);
+        }
+        placeRemarks(remarks, nestedClasses);
+        break
+      default:
+        if (classAnalysis[aspectName]._) {
+          placeRemarks(remarks, classAnalysis[aspectName]._);
+        }
+    }
+  }
+}
+
+function placeRemarks(sortedRemarks, analysisEntries) {
+  var sortedNames = Object.keys(analysisEntries).sort(function(leftKey,rightKey) {
+    return comparePosition(analysisEntries[leftKey].from, analysisEntries[rightKey].from);
+  });
+  // either run out of remarks or run out of entries
+  for (var i = 0, j = 0; i < sortedRemarks.length && j < sortedNames.length;) {
+    var remark = sortedRemarks[i], entry = analysisEntries[sortedNames[j]];
+    if (comparePosition(remark.from, entry.inside) < 0) {
+      // goto next remark if it does not start before the literal where the first entry is found
+      ++i;
+    } else if (comparePosition(remark.from, entry.from) < 0) {
+      // add remark if it starts before the first entry
+      var entryRemarks = entry.remarks || (entry.remarks = []);
+      entryRemarks.push(remark);
+      // goto next remark
+      ++i;
+    } else if (comparePosition(remark.from, entry.to) < 0) {
+      // skip remark if it's inside the first entry
+      ++i;
+    } else {
+      // goto next entry
+      ++j;
+    }
+  }
+}
+
+function comparePosition(lhs, rhs) {
+  var leftLine = lhs.line, rightLine = rhs.line;
+  if (leftLine <= rightLine) {
+    return -1;
+  } else if (leftLine > rightLine) {
+    return 1;
+  } else {
+    var leftColumn = lhs.column, rightColumn = rhs.column;
+    if (leftColumn <= rightColumn) {
+      return -1;
+    } else if (leftColumn > rightColumn) {
+      return 1;
+    } else {
+      return 0;
+    }
+  }
 }
