@@ -12,7 +12,7 @@ module.exports = archivePath => util.unzip(archivePath)
     // collect class scripts of modules
     const readingClasses = [];
     const modules = archive.modules = {};
-    for (let entry in archive.entries) {
+    for (const entry in archive.entries) {
       const moduleName = entry.substring(0, entry.indexOf('/'));
       if (moduleName.indexOf('.') > 0) {
         const classHome = `${moduleName}/${constants.module.classScripts.home}`;
@@ -30,11 +30,11 @@ module.exports = archivePath => util.unzip(archivePath)
   .then(modules => {
     // use synchronous calls to analyze class scripts
     const analysis_ = {};
-    for (let moduleName in modules) {
+    for (const moduleName in modules) {
       const classes = modules[moduleName];
       if (util.hasEnumerables(classes)) {
         const moduleAnalysis_ = {};
-        for (let className in classes) {
+        for (const className in classes) {
           const scriptSource = classes[className];
           moduleAnalysis_[className] = analyzeClass(moduleName, className, scriptSource);
         }
@@ -212,17 +212,17 @@ function collectRemarks(remarks, classAnalysis, nested) {
       classAnalysis.remarks = classRemarks;
     }
   }
-  for (let aspectName in classAnalysis) {
+  for (const aspectName in classAnalysis) {
     switch (aspectName) {
       case 'instance': case 'class':
         const nestedSide = classAnalysis[aspectName]._;
-        for (let keywordName in nestedSide) {
+        for (const keywordName in nestedSide) {
           placeRemarks(remarks, nestedSide[keywordName]._);
         }
         break;
       case 'nested':
         const nestedClasses = classAnalysis.nested._;
-        for (let nestedName in nestedClasses) {
+        for (const nestedName in nestedClasses) {
           collectRemarks(remarks, nestedClasses[nestedName], true);
         }
         placeRemarks(remarks, nestedClasses);
