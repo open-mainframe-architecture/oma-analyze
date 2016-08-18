@@ -16,7 +16,7 @@ module.exports = archivePath => util.unzip(archivePath)
       const moduleName = entry.substring(0, entry.indexOf('/'));
       if (moduleName.indexOf('.') > 0) {
         const classHome = `${moduleName}/${constants.module.classScripts.home}`;
-        if (util.startsWith(entry, classHome)) {
+        if (entry.startsWith(classHome)) {
           const classes = modules[moduleName] || (modules[moduleName] = {});
           const classPath = entry.substring(classHome.length + 1, entry.length - 3);
           const className = classPath.replace(util.vseps, '.');
@@ -29,19 +29,19 @@ module.exports = archivePath => util.unzip(archivePath)
   })
   .then(modules => {
     // use synchronous calls to analyze class scripts
-    const analysis_ = {};
+    const analysis = {};
     for (const moduleName in modules) {
       const classes = modules[moduleName];
       if (util.hasEnumerables(classes)) {
-        const moduleAnalysis_ = {};
+        const moduleAnalysis = {};
         for (const className in classes) {
           const scriptSource = classes[className];
-          moduleAnalysis_[className] = analyzeClass(moduleName, className, scriptSource);
+          moduleAnalysis[className] = analyzeClass(moduleName, className, scriptSource);
         }
-        analysis_[moduleName] = { _: moduleAnalysis_ };
+        analysis[moduleName] = { _: moduleAnalysis };
       }
     }
-    return { _: analysis_ };
+    return { _: analysis };
   })
   ;
 
@@ -75,6 +75,8 @@ function offset(keyword, member) {
 function aspect(analysis, name) {
   return analysis[name] || (analysis[name] = { _: {} });
 }
+
+let nextComputedKey = 0;
 
 var ClassVisitor = {
   Program: function(astPath) {
@@ -129,8 +131,9 @@ var ClassVisitor = {
   },
   ObjectMember: function(astPath) {
     const matched = this.matchedKeyword, node = astPath.node;
-    if (matched && matched.literal === astPath.parent && !node.computed) {
-      const key = node.key.name, analysis = this.analysis, value = node.value;
+    if (matched && matched.literal === astPath.parent) {
+      const key = node.computed ? `[${++nextComputedKey}]` : node.key.name;
+      const analysis = this.analysis, value = node.value;
       const keyword = matched.keyword, memberAnalysis = offset(matched, node);
       switch (keyword) {
         case 'nest':
@@ -194,7 +197,7 @@ function analyzeClass(moduleName, className, scriptSource) {
   traverse(ast, ClassVisitor, null, state);
   const remarks = ast.comments
     // remark starts with at-sign, otherwise it's a regular comment
-    .filter(comment => comment.value.length > 1 && comment.value.charAt(0) === '@')
+    .filter(comment => comment.value.charAt(0) === '@')
     .map(remark => ({ value: remark.value, from: remark.loc.start }));
   if (remarks.length) {
     collectRemarks(remarks, classAnalysis);
